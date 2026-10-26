@@ -701,9 +701,15 @@ pub struct RetryLimitReachedError {
 
 impl std::fmt::Display for RetryLimitReachedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // A direct 429 can reach this error even when HTTP retries are disabled.
+        let message = if self.status == StatusCode::TOO_MANY_REQUESTS {
+            "rate limited: HTTP"
+        } else {
+            "exceeded retry limit, last status:"
+        };
         write!(
             f,
-            "exceeded retry limit, last status: {}{}",
+            "{message} {}{}",
             self.status,
             self.request_id
                 .as_ref()

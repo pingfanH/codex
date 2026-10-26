@@ -52,6 +52,8 @@ message ModelProvider {
   optional string model_catalog_url = 19;
   optional string project_id = 20;
   optional string location = 21;
+  optional uint64 request_retry_delay_ms = 22;
+  optional bool retry_429 = 23;
 }
 
 message StringMap {

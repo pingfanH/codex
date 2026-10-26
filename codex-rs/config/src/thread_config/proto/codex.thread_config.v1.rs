@@ -83,6 +83,10 @@ pub struct ModelProvider {
     pub project_id: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag = "21")]
     pub location: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint64, optional, tag = "22")]
+    pub request_retry_delay_ms: ::core::option::Option<u64>,
+    #[prost(bool, optional, tag = "23")]
+    pub retry_429: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StringMap {

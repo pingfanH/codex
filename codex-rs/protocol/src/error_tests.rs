@@ -11,6 +11,32 @@ use http::StatusCode;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 
+#[test]
+fn http_429_does_not_claim_retries_were_exhausted() {
+    for (request_id, expected) in [
+        (None, "rate limited: HTTP 429 Too Many Requests"),
+        (
+            Some("req-123".to_string()),
+            "rate limited: HTTP 429 Too Many Requests, request id: req-123",
+        ),
+    ] {
+        let error = CodexErr::RetryLimit(RetryLimitReachedError {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            request_id,
+        });
+        assert_eq!(error.to_string(), expected);
+        assert_eq!(error.retry_delay(/*retry_count*/ 1), None);
+    }
+    assert_eq!(
+        RetryLimitReachedError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            request_id: None,
+        }
+        .to_string(),
+        "exceeded retry limit, last status: 500 Internal Server Error",
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn codex_err_debug_preserves_legacy_shape() {
     let actual = [

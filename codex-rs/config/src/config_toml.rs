@@ -1029,6 +1029,37 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    #[test]
+    fn http_request_retry_options_survive_config_loading() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "Custom"
+base_url = "https://example.com/v1"
+request_max_retries = 8
+request_retry_delay_ms = 1000
+retry_429 = true
+"#,
+        )
+        .expect("valid provider retry configuration");
+        let providers = codex_model_provider_info::merge_configured_model_providers(
+            codex_model_provider_info::built_in_model_providers(/*openai_base_url*/ None),
+            config.model_providers,
+        )
+        .expect("custom provider should merge");
+        let provider = &providers[config.model_provider.as_deref().expect("model provider")];
+        let retry = provider
+            .to_api_provider(/*auth_mode*/ None)
+            .expect("API provider")
+            .retry;
+
+        assert!(retry.retry_429);
+        assert_eq!(retry.max_attempts, 8);
+        assert_eq!(retry.base_delay, std::time::Duration::from_secs(1));
+    }
+
     const WORKSPACE_ID_A: &str = "123e4567-e89b-42d3-a456-426614174000";
     const WORKSPACE_ID_B: &str = "123e4567-e89b-42d3-a456-426614174001";
 

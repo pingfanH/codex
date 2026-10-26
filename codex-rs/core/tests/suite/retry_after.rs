@@ -341,6 +341,74 @@ async fn responses_http_uses_retry_after() -> Result<()> {
     Ok(())
 }
 
+/// Opted-in 429 retries recover at the HTTP layer, even with stream retries disabled.
+#[test_case::test_case(None, 1_000; "configured_backoff")]
+#[test_case::test_case(Some("1"), 30_000; "server_retry_after")]
+#[tokio::test(flavor = "current_thread")]
+async fn responses_http_429_retries_when_enabled(
+    retry_after: Option<&str>,
+    request_retry_delay_ms: u64,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut telemetry = RetryTelemetryCapture::install();
+    let server = responses::start_mock_server().await;
+    let mut rate_limited = ResponseTemplate::new(429)
+        .set_body_json(json!({ "error": { "code": "rate_limit_exceeded" } }));
+    if let Some(retry_after) = retry_after {
+        rate_limited = rate_limited.insert_header("Retry-After", retry_after);
+    }
+    let response_mock = responses::mount_response_sequence(
+        &server,
+        vec![
+            rate_limited,
+            responses::sse_response(responses::sse(vec![
+                responses::ev_response_created("recovered"),
+                responses::ev_completed("recovered"),
+            ])),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider.retry_429 = Some(true);
+            config.model_provider.request_max_retries = Some(1);
+            config.model_provider.request_retry_delay_ms = Some(request_retry_delay_ms);
+            config.model_provider.stream_max_retries = Some(0);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    submit_user_input(&test, "retry the rate-limited HTTP request").await?;
+    let retry = telemetry.next_retry().await;
+    assert_eq!(retry.attempt, 1);
+    assert_eq!(retry.layer, "http");
+    assert_eq!(retry.operation, "request");
+    if retry_after.is_some() {
+        assert!(retry.delay <= Duration::from_secs(1));
+        assert!(wait_for_retry(&mut telemetry, &retry).await >= Duration::from_secs(1));
+    } else {
+        assert!((Duration::from_millis(900)..=Duration::from_millis(1_100)).contains(&retry.delay));
+        wait_for_retry(&mut telemetry, &retry).await;
+    }
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::Error(error) => panic!("unexpected terminal error: {error:?}"),
+            EventMsg::TurnComplete(completed) => {
+                assert_eq!(completed.error, None);
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(response_mock.requests().len(), 2);
+    assert_eq!(
+        telemetry.events.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    );
+    Ok(())
+}
+
 /// A 429 with server advice retries in the sampling loop and completes without a terminal error.
 #[tokio::test(flavor = "current_thread")]
 async fn responses_http_429_uses_retry_after() -> Result<()> {

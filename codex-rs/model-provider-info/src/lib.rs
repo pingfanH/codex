@@ -68,6 +68,7 @@ pub fn read_managed_residency_requirement() -> Option<ResidencyRequirement> {
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
 const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
+const DEFAULT_REQUEST_RETRY_DELAY_MS: u64 = 200;
 const DEFAULT_AWS_CREDENTIAL_EXPORT_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_AWS_AUTH_REFRESH_TIMEOUT_MS: u64 = 300_000;
 pub const DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS: u64 = 15_000;
@@ -189,6 +190,11 @@ pub struct ModelProviderInfo {
     pub env_http_headers: Option<HashMap<String, String>>,
     /// Maximum number of times to retry a failed HTTP request to this provider.
     pub request_max_retries: Option<u64>,
+    /// Base delay (in milliseconds) for HTTP request retries. Defaults to 200 ms.
+    /// Retries use exponential backoff with jitter unless the server supplies Retry-After.
+    pub request_retry_delay_ms: Option<u64>,
+    /// Whether to retry HTTP 429 responses. Defaults to false and uses request_max_retries.
+    pub retry_429: Option<bool>,
     /// Number of times to retry reconnecting a dropped streaming response before failing.
     pub stream_max_retries: Option<u64>,
     /// Idle timeout (in milliseconds) to wait for activity on a streaming response before treating
@@ -463,8 +469,11 @@ other non-default provider fields are not supported"
         }
         let retry = ApiRetryConfig {
             max_attempts: self.request_max_retries(),
-            base_delay: Duration::from_millis(200),
-            retry_429: false,
+            base_delay: Duration::from_millis(
+                self.request_retry_delay_ms
+                    .unwrap_or(DEFAULT_REQUEST_RETRY_DELAY_MS),
+            ),
+            retry_429: self.retry_429.unwrap_or(false),
             retry_5xx: true,
             retry_transport: true,
         };
@@ -564,6 +573,8 @@ other non-default provider fields are not supported"
             ),
             // Use global defaults for retry/timeout unless overridden in config.toml.
             request_max_retries: None,
+            request_retry_delay_ms: None,
+            retry_429: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             websocket_connect_timeout_ms: None,
@@ -606,6 +617,8 @@ other non-default provider fields are not supported"
             )])),
             env_http_headers: None,
             request_max_retries: None,
+            request_retry_delay_ms: None,
+            retry_429: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             websocket_connect_timeout_ms: None,
@@ -645,6 +658,8 @@ other non-default provider fields are not supported"
             http_headers: None,
             env_http_headers: None,
             request_max_retries: None,
+            request_retry_delay_ms: None,
+            retry_429: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             websocket_connect_timeout_ms: None,
@@ -845,6 +860,8 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         http_headers: None,
         env_http_headers: None,
         request_max_retries: None,
+        request_retry_delay_ms: None,
+        retry_429: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
         websocket_connect_timeout_ms: None,

@@ -189,6 +189,8 @@ fn model_provider_from_proto(
         http_headers: provider.http_headers.map(redacted_string_map),
         env_http_headers: provider.env_http_headers.map(|map| map.values),
         request_max_retries: provider.request_max_retries,
+        request_retry_delay_ms: provider.request_retry_delay_ms,
+        retry_429: provider.retry_429,
         stream_max_retries: provider.stream_max_retries,
         stream_idle_timeout_ms: provider.stream_idle_timeout_ms,
         websocket_connect_timeout_ms: provider.websocket_connect_timeout_ms,
@@ -225,6 +227,8 @@ fn model_provider_to_proto(
         http_headers,
         env_http_headers,
         request_max_retries,
+        request_retry_delay_ms,
+        retry_429,
         stream_max_retries,
         stream_idle_timeout_ms,
         websocket_connect_timeout_ms,
@@ -249,6 +253,8 @@ fn model_provider_to_proto(
         http_headers: http_headers.map(proto_string_map),
         env_http_headers: env_http_headers.map(|values| proto::StringMap { values }),
         request_max_retries,
+        request_retry_delay_ms,
+        retry_429,
         stream_max_retries,
         stream_idle_timeout_ms,
         websocket_connect_timeout_ms,
@@ -465,6 +471,27 @@ mod tests {
     }
 
     #[test]
+    fn model_provider_proto_preserves_optional_retry_options() {
+        for retry_429 in [None, Some(false), Some(true)] {
+            let expected = ModelProviderInfo {
+                request_retry_delay_ms: None,
+                retry_429,
+                ..expected_provider()
+            };
+            let proto = model_provider_to_proto("local", expected.clone());
+            let (_, actual) = model_provider_from_proto(proto).expect("model provider from proto");
+
+            assert_eq!(actual, expected);
+            let retry = actual
+                .to_api_provider(/*auth_mode*/ None)
+                .expect("API provider")
+                .retry;
+            assert_eq!(retry.retry_429, retry_429.unwrap_or(false));
+            assert_eq!(retry.base_delay, std::time::Duration::from_millis(200));
+        }
+    }
+
+    #[test]
     fn model_provider_proto_defaults_standalone_web_search_to_false() {
         let expected = ModelProviderInfo {
             supports_standalone_web_search: false,
@@ -522,6 +549,8 @@ mod tests {
                                 )]),
                             }),
                             request_max_retries: Some(7),
+                            request_retry_delay_ms: Some(1_000),
+                            retry_429: Some(true),
                             stream_max_retries: Some(8),
                             stream_idle_timeout_ms: Some(9_000),
                             websocket_connect_timeout_ms: Some(10_000),
@@ -586,6 +615,8 @@ mod tests {
                 "LOCAL_HEADER".to_string(),
             )])),
             request_max_retries: Some(7),
+            request_retry_delay_ms: Some(1_000),
+            retry_429: Some(true),
             stream_max_retries: Some(8),
             stream_idle_timeout_ms: Some(9_000),
             websocket_connect_timeout_ms: Some(10_000),

@@ -117,7 +117,7 @@ async fn http_retry_deadline_survives_mapping_and_respects_terminal_errors() {
                         http_status_code: Some(429),
                     },
                     Some(429),
-                    "exceeded retry limit, last status: 429 Too Many Requests".to_string(),
+                    "rate limited: HTTP 429 Too Many Requests".to_string(),
                 ),
             );
         }

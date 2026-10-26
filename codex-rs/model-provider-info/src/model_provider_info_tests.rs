@@ -6,6 +6,143 @@ use std::num::NonZeroU64;
 use tempfile::tempdir;
 
 #[test]
+fn request_retry_options_preserve_defaults() {
+    for retry_429 in [None, Some(false), Some(true)] {
+        let info = ModelProviderInfo {
+            retry_429,
+            ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
+        };
+        let retry = info.to_api_provider(/*auth_mode*/ None).unwrap().retry;
+        assert_eq!(retry.max_attempts, 4);
+        assert_eq!(retry.base_delay, Duration::from_millis(200));
+        assert_eq!(retry.retry_429, retry_429.unwrap_or(false));
+        assert!(retry.retry_5xx);
+        assert!(retry.retry_transport);
+    }
+}
+
+#[test]
+fn request_retry_options_round_trip_through_toml() {
+    let provider: ModelProviderInfo = toml::from_str(
+        r#"
+name = "Custom"
+request_max_retries = 8
+request_retry_delay_ms = 1000
+retry_429 = true
+"#,
+    )
+    .unwrap();
+    let retry = provider.to_api_provider(/*auth_mode*/ None).unwrap().retry;
+    assert_eq!(retry.max_attempts, 8);
+    assert_eq!(retry.base_delay, Duration::from_secs(1));
+    assert!(retry.retry_429);
+    assert_eq!(
+        toml::from_str::<ModelProviderInfo>(&toml::to_string(&provider).unwrap()).unwrap(),
+        provider,
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn http_429_retry_options_control_attempts_and_backoff() {
+    use codex_client::Request;
+    use codex_client::run_with_retry;
+    use codex_http_client::TransportError;
+    use std::sync::Mutex;
+    use tokio::time::Instant;
+
+    for (retry_429, max_retries, expected_attempts) in [
+        (None, 2, 1),
+        (Some(false), 2, 1),
+        (Some(true), 0, 1),
+        (Some(true), 2, 3),
+    ] {
+        let provider = ModelProviderInfo {
+            request_max_retries: Some(max_retries),
+            request_retry_delay_ms: Some(1_000),
+            retry_429,
+            ..Default::default()
+        }
+        .to_api_provider(/*auth_mode*/ None)
+        .unwrap();
+        let attempts = Mutex::new(Vec::new());
+        let result = run_with_retry(
+            provider.retry.to_policy(),
+            || Request::new(http::Method::POST, provider.url_for_path("responses")),
+            |_, _| {
+                attempts.lock().unwrap().push(Instant::now());
+                std::future::ready(Err::<(), _>(TransportError::Http {
+                    status: http::StatusCode::TOO_MANY_REQUESTS,
+                    url: None,
+                    headers: None,
+                    body: None,
+                    retry_after: None,
+                }))
+            },
+        )
+        .await;
+        assert!(
+            matches!(result, Err(TransportError::Http { status, .. }) if status == http::StatusCode::TOO_MANY_REQUESTS)
+        );
+        let attempts = attempts.into_inner().unwrap();
+        assert_eq!(attempts.len(), expected_attempts);
+        if expected_attempts == 3 {
+            assert!(
+                (Duration::from_millis(900)..=Duration::from_millis(1_100))
+                    .contains(&(attempts[1] - attempts[0]))
+            );
+            assert!(
+                (Duration::from_millis(1_800)..=Duration::from_millis(2_200))
+                    .contains(&(attempts[2] - attempts[1]))
+            );
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn http_429_retry_after_overrides_configured_delay_and_recovers() {
+    use codex_client::Request;
+    use codex_client::run_with_retry;
+    use codex_http_client::RetryAfter;
+    use codex_http_client::TransportError;
+    use tokio::time::Instant;
+
+    let provider = ModelProviderInfo {
+        request_max_retries: Some(1),
+        request_retry_delay_ms: Some(30_000),
+        retry_429: Some(true),
+        ..Default::default()
+    }
+    .to_api_provider(/*auth_mode*/ None)
+    .unwrap();
+    let started = Instant::now();
+    let result = run_with_retry(
+        provider.retry.to_policy(),
+        || Request::new(http::Method::POST, provider.url_for_path("responses")),
+        |_, attempt| {
+            std::future::ready(if attempt == 0 {
+                Err(TransportError::Http {
+                    status: http::StatusCode::TOO_MANY_REQUESTS,
+                    url: None,
+                    headers: None,
+                    body: None,
+                    retry_after: RetryAfter::from_headers(&HeaderMap::from_iter([(
+                        http::header::RETRY_AFTER,
+                        HeaderValue::from_static("5"),
+                    )])),
+                })
+            } else {
+                assert_eq!(attempt, 1);
+                assert_eq!(Instant::now() - started, Duration::from_secs(5));
+                Ok(())
+            })
+        },
+    )
+    .await;
+    assert!(result.is_ok());
+    assert_eq!(Instant::now() - started, Duration::from_secs(5));
+}
+
+#[test]
 fn runtime_internal_metadata_opt_in_is_not_serialized_or_configurable() {
     let trusted = ModelProviderInfo {
         include_internal_metadata: true,
@@ -90,6 +227,8 @@ base_url = "http://localhost:11434/v1"
         http_headers: None,
         env_http_headers: None,
         request_max_retries: None,
+        request_retry_delay_ms: None,
+        retry_429: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
         websocket_connect_timeout_ms: None,
@@ -131,6 +270,8 @@ query_params = { api-version = "2025-04-01-preview" }
         http_headers: None,
         env_http_headers: None,
         request_max_retries: None,
+        request_retry_delay_ms: None,
+        retry_429: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
         websocket_connect_timeout_ms: None,
@@ -176,6 +317,8 @@ supports_standalone_web_search = true
             "X-Example-Env-Header".to_string() => "EXAMPLE_ENV_VAR".to_string(),
         }),
         request_max_retries: None,
+        request_retry_delay_ms: None,
+        retry_429: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
         websocket_connect_timeout_ms: None,
@@ -368,6 +511,8 @@ fn test_create_amazon_bedrock_provider() {
             }),
             env_http_headers: None,
             request_max_retries: None,
+            request_retry_delay_ms: None,
+            retry_429: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             websocket_connect_timeout_ms: None,

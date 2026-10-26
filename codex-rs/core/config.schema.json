@@ -3054,9 +3054,19 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "request_retry_delay_ms": {
+          "description": "Base delay (in milliseconds) for HTTP request retries. Defaults to 200 ms. Retries use exponential backoff with jitter unless the server supplies Retry-After.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "requires_openai_auth": {
           "default": false,
           "description": "Does this provider require an OpenAI API key or ChatGPT login token? If true, the user is presented with a login screen on first run, and credentials are stored using the backend selected by `cli_auth_credentials_store`. If false (the default), the login screen is skipped, and the API key (if needed) comes from the environment variable specified by `env_key`.",
+          "type": "boolean"
+        },
+        "retry_429": {
+          "description": "Whether to retry HTTP 429 responses. Defaults to false and uses request_max_retries.",
           "type": "boolean"
         },
         "stream_idle_timeout_ms": {
